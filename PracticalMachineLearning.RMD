@@ -1,0 +1,149 @@
+---
+title: "<span style='font-size: 30px'>Practical Machine Learning"
+author: Priya Sebastian
+date: July 19, 2020
+output: html_document
+---
+
+# Project Overview
+In this project, I'm using a personal activity dataset to build a model that will predict the manner in which a person did the exercise. The steps in the project include - obtaining, analyzing, cleaning and splitting the dataset, using multiple machine learning methods to train the model and test these models on a sample test set. Then confusion matrices are produced to gauge the accuracy of predictions.
+
+# Background
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+# Loading the Dataset and Basic Analysis
+
+The code below loads the libraries we need and loads in the dataset. We'll then look at the dimensions to get a sense of the size of the training and test sets and a few rows to get a sense of the columns and the data they contain.
+
+```{r load libraries and the training and testing data, results='hide',error=FALSE,message=FALSE,warning=FALSE}
+library(dplyr)
+library(rpart) 
+library(rpart.plot) 
+library(stats)
+library(caret)
+library(data.table)
+library(tidyverse)
+library(ggplot2)
+library(rattle)
+library(randomForest)
+library(xgboost)
+library(DMwR)
+pml_training <- read.csv("pml-training.csv", na.strings=c("NA","#DIV/0!", ""))
+pml_testing <- read.csv("pml-testing.csv", na.strings=c("NA","#DIV/0!", ""))
+```
+
+```{r Get dataset dimensions}
+dim(pml_training)
+dim(pml_testing)
+```
+```{r Look at a few rows, results='hide'}
+head(pml_training)
+```
+
+We'll now look at some basic statistics of the dataset. Our response variable is classe which is a categorical variable and so we'll create a barplot showing the distribution to determine whether or not the dataset is balanced
+
+```{r Basic Data Summary, results='hide'}
+summary(pml_training)
+```
+```{r Data Summary}
+pml_training %>% distinct(classe)
+pml_training %>% distinct(new_window)
+
+ggplot(pml_training, aes(classe)) +  geom_bar(fill = "red") 
+```
+
+The plot shows us that there are 5 possible responses A,B,C,D and E and they're fairly well distributed. 
+
+# Data Cleaning 
+
+The first 7 columns of the dataset (X, user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp, new_window and num_window) are IDs and are therefore removed from a datset. 
+```{r Remove redundant columns}
+# Remove columns that are IDs or stuff we do not need. In this case, the columns removed are X, user_name, raw_timestamp_part_1, 
+# raw_timestamp_part_2, cvtd_timestamp, new_window and num_window
+
+pml_train<- pml_training[-c(1:7)]
+pml_test <- pml_testing[-c(1:7)]
+```
+
+Now we'll check if we have columns with NAs and remove them. Summing the number of NAs by column showed that the columns either had a very large number of NAs or none at all. So instead of removing rows with NAs or using dummy values (or means), I decided to drop those columns.(I also think the info from these columns is included in the columns without NAs)
+
+```{r Keep non-NA columns, results='hide'}
+colSums(is.na(pml_training))
+
+pml_train<-pml_train[,colSums(is.na(pml_train)) == 0]
+pml_test <-pml_test[,colSums(is.na(pml_test)) == 0]
+
+pml_train$classe <- factor(pml_train$classe)
+```
+
+# Split the training datasets for model building
+After cleaning, the dataset now has 53 columns (52 predictor variables and 1 response). I'm now splitting the training dataset using a 70-30 train-test split. We'll use this to train our models.
+
+```{r Split the Data using a 70-30 split}
+set.seed(123)
+inTrain <- createDataPartition(y = pml_train$classe, p = 0.7, list = FALSE)
+training <- pml_train[inTrain,]
+testing <- pml_train[-inTrain,]
+dim(training)
+dim(testing)
+```
+
+# Modeling 
+This is a classification problem and so I'm using three different classification methods - Random forests, decision trees and KNN. We'll first build the model using the chosen method, evaluate it using the partitioned test dataset and then create the confusion matrix in each case to see how accurate the models are.
+
+## Cross Validation
+I've just used a holdout method by splitting the dataset into training and test datasets
+
+## Random Forests
+First I'll use Random Forests to build a model. 
+```{r Training a model using random forests. Evaluating using the test datset and creating the confusion matrix.}
+modFit_RF <- randomForest(classe ~ .,data=training,method="class")
+
+prediction_RF<-predict(modFit_RF,newdata=testing)
+
+str(testing$classe)
+
+confusionMatrix(prediction_RF,testing$classe)
+```
+The accuracy using Random forests is 99.51%. And looking at the confusion matrix we see that it also classifies the response types quite well
+
+## Decision Trees
+Now I'll use decision trees
+```{r Training a model using decision trees. Evaluating using the test datset and creating the confusion matrix.}
+modFit_DT <- rpart(classe ~ .,data=training,method="class")
+
+
+prediction_DT<-predict(modFit_DT,testing, type="class")
+
+str(testing$classe)
+
+confusionMatrix(prediction_DT,testing$classe)
+```
+The accuracy of 75.73% is quite low compared to the random forest model. It also does not classify any individual response better than the previous model. 
+
+## KNN
+I used a loop to get accuracies with k going from 1 to 10 and 3 turned out to be the best choice. k=1 produced the highest accuracy.
+
+
+```{r Training a model using KNN. Evaluating using the test datset and creating the confusion matrix.}
+Acc_knn<-0
+for(i in 1:10)
+{
+modFit_KNN <- kNN(classe ~ .,training,testing,norm=TRUE,k=i)
+cf_knn<-table(modFit_KNN,testing[,'classe'])
+Acc_knn[i]<-sum(diag(cf_knn))/sum(cf_knn)
+}
+
+
+modFit_KNN <- kNN(classe ~ .,training,testing,norm=TRUE,k=1)
+cf_knn<-table(modFit_KNN,testing[,'classe'])
+Acc_knn<-sum(diag(cf_knn))/sum(cf_knn)
+
+cf_knn
+Acc_knn
+```
+# Final Model Used
+Looking at the confusion matrix, we see that knn is very slightly better at predicting E than the random forest. However given that overall, Random Forests produced a slightly higher accuracy and higher correct classifications of A,B,C and D, I've discarded the other two and settled on the Random Forest Model.
+
+# Out of Sample Error
+The out of sample error is 1-Accuracy = 1=0.9956 = 0.0044 or 0.44%
